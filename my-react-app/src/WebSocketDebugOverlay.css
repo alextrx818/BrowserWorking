@@ -1,0 +1,142 @@
+.websocket-debug-overlay {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 350px;
+  background-color: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 9999;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 15px;
+  background-color: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.debug-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: bold;
+  color: #4CAF50;
+}
+
+.debug-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.debug-controls button {
+  background-color: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #ccc;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: background-color 0.2s;
+}
+
+.debug-controls button:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.close-button {
+  color: #ff6b6b !important;
+}
+
+.debug-content {
+  padding: 15px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.status-label {
+  font-weight: bold;
+  margin-right: 10px;
+}
+
+.status-value {
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.metric-row, .timing-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 15px;
+}
+
+.metric, .timing {
+  text-align: center;
+  flex: 1;
+  padding: 8px 4px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  margin: 0 2px;
+}
+
+.metric-label, .timing-label {
+  color: #aaa;
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.metric-value, .timing-value {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.message-section {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.message-label {
+  color: #aaa;
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+
+.message-content {
+  word-break: break-word;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.help-text {
+  margin-top: 15px;
+  font-size: 10px;
+  text-align: center;
+  color: #888;
+}
+
+kbd {
+  background-color: #333;
+  border-radius: 3px;
+  border: 1px solid #666;
+  color: #fff;
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 4px;
+  margin: 0 2px;
+}
