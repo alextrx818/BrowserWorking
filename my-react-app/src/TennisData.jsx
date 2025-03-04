@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from 'react-query';
 import './TennisData.css';
 import WebSocketDebugOverlay from './WebSocketDebugOverlay';
 
@@ -12,15 +13,20 @@ function isEqual(obj1, obj2) {
 }
 
 function TennisData() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [expandedMatch, setExpandedMatch] = useState(null);
+  const API_ENDPOINT = '/api/tennis';
+  const DEBUG = false; // Set to true to enable more verbose logging
+  
+  // React Query client
+  const queryClient = useQueryClient();
+  
+  // State variables
   const [wsStatus, setWsStatus] = useState('disconnected');
+  const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState('Never');
   const [wsMessageCount, setWsMessageCount] = useState(0);
-  const [renderCount, setRenderCount] = useState(0);
   const [updateCount, setUpdateCount] = useState(0);
+  const [expandedMatch, setExpandedMatch] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [debugOverlayVisible, setDebugOverlayVisible] = useState(false);
   const [lastWsMessage, setLastWsMessage] = useState(null);
   const [wsConnectionTime, setWsConnectionTime] = useState(null);
@@ -32,6 +38,44 @@ function TennisData() {
   
   // Create a separate state for previous match data to compare for highlighting changes
   const [previousMatches, setPreviousMatches] = useState({});
+  
+  // React Query hook for fetching tennis data
+  const { 
+    data: queryData,
+    isLoading: queryLoading,
+    isError: queryError,
+    error: queryErrorDetails,
+    refetch
+  } = useQuery(
+    'tennisData', 
+    async () => {
+      logDebug('Fetching data using React Query...');
+      const response = await fetch(API_ENDPOINT);
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      return response.json();
+    },
+    {
+      refetchOnWindowFocus: false,
+      refetchInterval: false, // Disable auto polling, we'll use WebSockets
+      onSuccess: (data) => {
+        if (data && data.matches && data.matches.length > 0) {
+          dataRef.current = data;
+          const timestamp = data.timestamp 
+            ? new Date(data.timestamp).toLocaleTimeString('en-US', { timeZone: 'America/New_York' })
+            : new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+          setLastUpdated(timestamp + ' ET (HTTP)');
+          setLoading(false);
+          setError(null);
+        }
+      },
+      onError: (err) => {
+        console.error('⚠️ Error fetching data via React Query:', err);
+        setError(err.message);
+      }
+    }
+  );
   
   // Function to check if a specific value has changed
   const hasValueChanged = (matchId, path, newValue) => {
@@ -64,7 +108,7 @@ function TennisData() {
   // Debug logger function
   const logDebug = (...args) => {
     if (DEBUG || window.tennisDebug?.enableLogging) {
-      console.log(`[TennisData:${renderCount}]`, ...args);
+      console.log(`[TennisData:${updateCount}]`, ...args);
       
       // Update the stats in the global object
       if (window.tennisDebug) {
@@ -75,17 +119,17 @@ function TennisData() {
 
   // Log component renders
   useEffect(() => {
-    logDebug(`Component rendered (${renderCount})`);
-    setRenderCount(prevCount => prevCount + 1);
-  }, [data, renderCount]);
+    logDebug(`Component rendered (${updateCount})`);
+    setUpdateCount(prevCount => prevCount + 1);
+  }, [updateCount]);
 
   // Use memo to prevent unnecessary re-renders
   const memoizedRender = useMemo(() => {
     // This will only be recalculated when data changes
     logDebug("Recalculating memoized render");
-    return data ? data.matches : null;
-  }, [data]);
-  
+    return dataRef.current ? dataRef.current.matches : null;
+  }, [dataRef]);
+
   const fetchData = async () => {
     try {
       logDebug('Fetching data from API...');
@@ -115,7 +159,6 @@ function TennisData() {
           console.log('⚠️ Data changed, updating state');
           dataRef.current = jsonData;
           previousDataHash.current = newDataHash;
-          setData(jsonData);
         } else {
           logDebug('Data unchanged, skipping state update');
         }
@@ -154,7 +197,6 @@ function TennisData() {
           console.log('⚠️ Using fallback data', fallbackData);
           dataRef.current = fallbackData;
           previousDataHash.current = JSON.stringify(fallbackData.matches);
-          setData(fallbackData);
         } else {
           console.log('⚠️ Keeping existing data rather than using fallback');
         }
@@ -200,7 +242,6 @@ function TennisData() {
         console.log('⚠️ Using error fallback data', fallbackData);
         dataRef.current = fallbackData;
         previousDataHash.current = JSON.stringify(fallbackData.matches);
-        setData(fallbackData);
       } else {
         console.log('⚠️ Error occurred but keeping existing data rather than using fallback');
       }
@@ -208,6 +249,20 @@ function TennisData() {
       setLoading(false);
     }
   };
+
+  // Update the handleRefresh function to use refetch from React Query
+  const handleRefresh = useCallback(() => {
+    console.log('Manual refresh requested');
+    refetch();
+  }, [refetch]);
+
+  useEffect(() => {
+    // Keep dataRef.current updated when queryData changes
+    if (queryData) {
+      dataRef.current = queryData;
+      setLoading(false);
+    }
+  }, [queryData]);
 
   // WebSocket message handler
   const processWebSocketData = useCallback((event) => {
@@ -295,26 +350,28 @@ function TennisData() {
       // Store which matches have changes
       setRecentUpdate(changedMatches);
       
-      // Update our state - use functional update to guarantee we're working with latest state
-      setData(prevData => {
+      // Update the React Query cache instead of using setState
+      // This avoids re-rendering the entire component tree
+      queryClient.setQueryData('tennisData', newData);
+      
+      // Also update our refs for compatibility with existing code
+      dataRef.current = newData;
+      previousDataHash.current = rawData;
+      
+      // Update timestamp display
+      const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+      setLastUpdated(timestamp + ' ET (WebSocket)');
+      
+      // Store the current matches for future change detection
+      setPreviousMatches(currentMatches);
+      
+      // Update counter for tracking
+      setUpdateCount(prev => {
         // Update global stats
         if (window.tennisDebug) {
           window.tennisDebug.stats.dataUpdates++;
         }
-        setUpdateCount(prev => prev + 1);
-        
-        // Update timestamp display
-        const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
-        setLastUpdated(timestamp + ' ET (WebSocket)');
-        
-        // Store new data in refs
-        dataRef.current = newData;
-        previousDataHash.current = rawData;
-        
-        // Store the current matches for future change detection
-        setPreviousMatches(currentMatches);
-        
-        return newData;
+        return prev + 1;
       });
       
       // Detailed WebSocket logging when enabled
@@ -329,6 +386,7 @@ function TennisData() {
       else if (DEBUG || updateCount % 5 === 0) {
         console.log(`[Tennis] Data update #${updateCount + 1}: ${matchesData.length} matches, ${changedMatches.size} changed`);
       }
+      
     } catch (err) {
       // Only log errors
       console.error('⚠️ Error processing WebSocket data:', err);
@@ -343,7 +401,81 @@ function TennisData() {
     } finally {
       setLoading(false);
     }
-  }, [updateCount]);
+  }, [queryClient, updateCount]);
+
+  // Function to initialize WebSocket connection
+  const initWebSocket = useCallback(() => {
+    // Setup WebSocket
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws`;
+    
+    logDebug(`Connecting to WebSocket at ${wsUrl}`);
+    console.log(`⚠️ Connecting to WebSocket at ${wsUrl}`);
+    
+    // Close any existing connection first
+    if (ws.current) {
+      try {
+        ws.current.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+    }
+    
+    try {
+      ws.current = new WebSocket(wsUrl);
+      
+      ws.current.onopen = () => {
+        console.log('⚠️ WebSocket connected successfully');
+        setWsStatus('connected');
+        setWsConnectionTime(Date.now());
+        
+        // Send an initial message to ensure the connection is working
+        try {
+          ws.current.send('ping');
+          console.log('⚠️ Sent initial ping message');
+        } catch (e) {
+          console.error('⚠️ Error sending initial ping:', e);
+        }
+      };
+      
+      ws.current.onmessage = processWebSocketData;
+      
+      ws.current.onerror = (error) => {
+        console.error('⚠️ WebSocket error:', error);
+        setWsStatus('error');
+        
+        // Update global error stats
+        if (window.tennisDebug) {
+          window.tennisDebug.stats.errors++;
+        }
+      };
+      
+      ws.current.onclose = (event) => {
+        console.log(`⚠️ WebSocket disconnected with code ${event.code}`);
+        setWsStatus('disconnected');
+      };
+      
+      // Return a cleanup function that window.clearWebSocket can call
+      return () => {
+        if (ws.current) {
+          try {
+            ws.current.close();
+          } catch (e) {
+            // Ignore close errors
+          }
+          ws.current = null;
+        }
+      };
+      
+    } catch (e) {
+      console.error('⚠️ Error creating WebSocket connection:', e);
+      setWsStatus('error');
+      
+      // Return empty cleanup function
+      return () => {};
+    }
+  }, [processWebSocketData]);
 
   // Add keyboard shortcut for debug overlay
   useEffect(() => {
@@ -374,7 +506,7 @@ function TennisData() {
           wsMessages: wsMessageCount,
           dataUpdates: updateCount,
           errors: 0,
-          renders: renderCount
+          renders: updateCount
         };
       }
       
@@ -392,94 +524,53 @@ function TennisData() {
     return () => {
       delete window.enableWebSocketDebug;
     };
-  }, [wsMessageCount, updateCount, renderCount]);
+  }, [wsMessageCount, updateCount]);
 
   useEffect(() => {
-    // Fetch data immediately when component mounts
-    logDebug('Component mounted, fetching initial data');
-    console.log('⚠️ Component mounted, fetching initial data');
-    fetchData();
-    
-    // Setup WebSocket
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws`;
-    logDebug(`Connecting to WebSocket at ${wsUrl}`);
-    console.log(`⚠️ Connecting to WebSocket at ${wsUrl}`);
-    
-    // Close any existing connection first
-    if (ws.current) {
-      ws.current.close();
-    }
-    
-    try {
-      ws.current = new WebSocket(wsUrl);
-      
-      ws.current.onopen = () => {
-        console.log('⚠️ WebSocket connected successfully');
-        setWsStatus('connected');
-        setWsConnectionTime(Date.now());
-        
-        // Send an initial message to ensure the connection is working
+    // For debug mode, we want to auto reconnect websocket when it disconnects
+    if (wsStatus === 'disconnected' && window.tennisDebug?.autoReconnect) {
+      console.log('Auto reconnect enabled, reconnecting WebSocket...');
+      if (ws.current) {
         try {
-          ws.current.send('ping');
-          console.log('⚠️ Sent initial ping message');
+          ws.current.close();
         } catch (e) {
-          console.error('⚠️ Error sending initial ping:', e);
+          // Ignore close error
         }
-      };
-      
-      ws.current.onmessage = processWebSocketData;
-      
-      ws.current.onerror = (error) => {
-        console.error('⚠️ WebSocket error:', error);
-        setWsStatus('error');
-        setError('WebSocket connection error. Falling back to polling.');
-        
-        // Update global error stats
-        if (window.tennisDebug) {
-          window.tennisDebug.stats.errors++;
-        }
-        
-        // Fall back to polling if WebSocket fails
-        console.log('⚠️ WebSocket failed, falling back to polling');
-        const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
-        return () => clearInterval(intervalId);
-      };
-      
-      ws.current.onclose = (event) => {
-        console.log(`⚠️ WebSocket disconnected with code ${event.code}`);
-        setWsStatus('disconnected');
-        
-        // If WebSocket closes unexpectedly, fall back to polling
-        if (event.code !== 1000) { // 1000 is normal closure
-          console.log('⚠️ WebSocket closed abnormally, falling back to polling');
-          const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
-          return () => clearInterval(intervalId);
-        }
-      };
-    } catch (e) {
-      console.error('⚠️ Error creating WebSocket connection:', e);
-      setWsStatus('error');
-      setError('Could not create WebSocket connection. Falling back to polling.');
-      
-      // Fall back to polling immediately
-      const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
-      return () => clearInterval(intervalId);
+      }
+      setTimeout(() => {
+        console.log('Reconnecting WebSocket...');
+        initWebSocket();
+      }, 1000);
     }
+  }, [wsStatus]);
+
+  // Set up data fetching when the component mounts
+  useEffect(() => {
+    // Remove the initial fetch since React Query handles this now
     
-    // Clean up
+    // Initialize WebSocket connection
+    window.clearWebSocket = initWebSocket();
+    
+    // Add keyboard shortcut for clearing database
+    const handleKeyDown = (e) => {
+      if (e.key === '`' && e.altKey) { // Alt + ` (backtick)
+        setDebugOverlayVisible(prev => !prev);
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    
+    // Cleanup
     return () => {
+      document.removeEventListener('keydown', handleKeyDown);
       if (ws.current) {
         ws.current.close();
       }
+      if (window.clearWebSocket) {
+        window.clearWebSocket();
+      }
     };
-  }, [processWebSocketData]);
-
-  const handleRefresh = () => {
-    logDebug('Manual refresh requested');
-    fetchData();
-  };
+  }, []);
 
   const toggleExpandMatch = (event, matchId) => {
     event.stopPropagation();
@@ -550,48 +641,64 @@ function TennisData() {
     );
   };
 
-  // Show loading message if still loading and no data yet
-  if (loading && !data) {
+  // Handle showing loading state
+  if (queryLoading && !dataRef.current) {
     return (
       <div className="tennis-data-container">
         <div className="loading">
-          <p>Loading tennis data...</p>
-          <p className="debug-info">WebSocket: {wsStatus}, Messages: {wsMessageCount}, Updates: {updateCount}</p>
+          <p>Loading tennis matches...</p>
           
-          {/* Force show debug overlay in loading state */}
-          <WebSocketDebugOverlay
-            visible={true}
-            wsStatus={wsStatus}
-            messageCount={wsMessageCount}
-            lastMessage={lastWsMessage}
-            updateCount={updateCount}
-            connectionTime={wsConnectionTime}
+          <WebSocketDebugOverlay 
+            isOpen={debugOverlayVisible}
+            stats={{
+              connected: wsStatus === 'connected',
+              connectionTime: wsConnectionTime ? new Date(wsConnectionTime).toLocaleTimeString() : 'N/A',
+              lastMessage: lastWsMessage,
+              wsMessages: wsMessageCount,
+              dataUpdates: updateCount
+            }}
+            lastUpdate={lastUpdated}
+            onClose={() => setDebugOverlayVisible(false)}
+          />
+        </div>
+      </div>
+    );
+  }
+  
+  // Handle error state
+  if (queryError && !dataRef.current) {
+    return (
+      <div className="tennis-data-container">
+        <div className="error">
+          <h3>Error Loading Data</h3>
+          <p>{queryErrorDetails?.message || "Failed to fetch tennis data"}</p>
+          
+          <WebSocketDebugOverlay 
+            isOpen={debugOverlayVisible}
+            stats={{
+              connected: wsStatus === 'connected',
+              connectionTime: wsConnectionTime ? new Date(wsConnectionTime).toLocaleTimeString() : 'N/A',
+              lastMessage: lastWsMessage,
+              wsMessages: wsMessageCount,
+              dataUpdates: updateCount
+            }}
+            lastUpdate={lastUpdated}
             onClose={() => {}}
           />
           
-          <button onClick={fetchData} className="retry-button">
+          <button onClick={handleRefresh} className="retry-button">
             Retry Loading Data
           </button>
         </div>
       </div>
     );
   }
-
-  // Show error message if there was an error
-  if (error) {
-    return (
-      <div className="tennis-data-container">
-        <div className="error">
-          <p>Error loading tennis data: {error}</p>
-          <button onClick={handleRefresh}>Try Again</button>
-          <p className="debug-info">WebSocket: {wsStatus}, Messages: {wsMessageCount}, Updates: {updateCount}</p>
-        </div>
-      </div>
-    );
-  }
-
-  // No data available
-  if (!data || !data.matches || data.matches.length === 0) {
+  
+  // Get matches from React Query data or from our ref if available
+  const matchesData = queryData?.matches || dataRef.current?.matches || [];
+  
+  // Show no data message if needed
+  if (matchesData.length === 0) {
     return (
       <div className="tennis-data-container">
         <div className="no-data">
@@ -652,7 +759,7 @@ function TennisData() {
       />
       
       <div className="header-row">
-        <h2>Live Tennis Matches ({data.matches.length})</h2>
+        <h2>Live Tennis Matches ({matchesData.length})</h2>
         <div className="refresh-section">
           <button onClick={handleRefresh}>Refresh Data</button>
           {lastUpdated && <span className="timestamp">Last updated: {lastUpdated}</span>}
@@ -673,7 +780,7 @@ function TennisData() {
       </div>
       
       <div className="matches-list">
-        {memoizedRender && memoizedRender.map((match, index) => {
+        {matchesData.map((match, index) => {
           // Extract data from match
           const betsapiData = match.betsapi_data || {};
           const rapidData = match.rapid_data || {};

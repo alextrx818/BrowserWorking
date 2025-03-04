@@ -1,36 +1,38 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from 'react-query';
+import { ReactQueryDevtools } from 'react-query/devtools';
 import './App.css';
 import TennisData from './TennisData';
 import MatchDetail from './MatchDetail';
 
+// Create a client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+      staleTime: 5000,
+    },
+  },
+});
+
 function App() {
   return (
-    <Router>
-      <div className="App">
-        <header className="App-header">
-          <h1>Live Sports Alerts</h1>
-          <nav>
-            <ul>
-              <li>
-                <Link to="/">Tennis</Link>
-              </li>
-            </ul>
-          </nav>
-        </header>
-        
-        <main className="App-main">
+    <QueryClientProvider client={queryClient}>
+      <Router>
+        <div className="App">
+          <header className="App-header">
+            <h1>Tennis Match Data</h1>
+          </header>
           <Routes>
             <Route path="/" element={<TennisData />} />
-            <Route path="/match/:id" element={<MatchDetail />} />
+            <Route path="/match/:matchId" element={<MatchDetail />} />
           </Routes>
-        </main>
-        
-        <footer className="App-footer">
-          <p>&copy; {new Date().getFullYear()} Live Sports Alerts</p>
-        </footer>
-      </div>
-    </Router>
+        </div>
+      </Router>
+      {process.env.NODE_ENV === 'development' && <ReactQueryDevtools initialIsOpen={false} />}
+    </QueryClientProvider>
   );
 }
 
