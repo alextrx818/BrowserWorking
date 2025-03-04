@@ -328,3 +328,126 @@
   background-color: rgba(0, 0, 0, 0.1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
+
+/* Add animation for live updates */
+@keyframes updatePulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 152, 219, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(52, 152, 219, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 152, 219, 0);
+  }
+}
+
+.match-card.recent-update {
+  animation: subtlePulse 0.8s ease-out;
+  transition: all 0.5s ease;
+}
+
+@keyframes subtlePulse {
+  0% {
+    background-color: rgba(52, 152, 219, 0.05);
+  }
+  50% {
+    background-color: rgba(52, 152, 219, 0.1);
+  }
+  100% {
+    background-color: rgba(52, 152, 219, 0.05);
+  }
+}
+
+/* Match odds and data styles */
+.match-odds {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 8px;
+  font-size: 14px;
+  background-color: rgba(0, 0, 0, 0.02);
+  border-radius: 4px;
+}
+
+.odds-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 33%;
+}
+
+.odds-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.odds-value {
+  font-weight: bold;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+/* Value change animations */
+.value-changed {
+  animation: flashValue 1s ease;
+}
+
+@keyframes flashValue {
+  0% {
+    color: inherit;
+    background-color: inherit;
+  }
+  20% {
+    color: #fff;
+    background-color: #3498db;
+  }
+  100% {
+    color: inherit;
+    background-color: inherit;
+  }
+}
+
+/* Individual element pulse for specific data changes */
+@keyframes pulseBorder {
+  0% {
+    border-color: rgba(52, 152, 219, 0.3);
+  }
+  50% {
+    border-color: rgba(52, 152, 219, 1);
+  }
+  100% {
+    border-color: rgba(52, 152, 219, 0.3);
+  }
+}
+
+.element-changed {
+  animation: pulseBorder 0.8s ease;
+  border: 1px solid rgba(52, 152, 219, 0.3);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
+/* Add styles for live indicators */
+.live-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #e74c3c;
+  display: inline-block;
+  margin-right: 5px;
+  animation: blink 1.5s infinite;
+}
+
+@keyframes blink {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.4;
+  }
+}

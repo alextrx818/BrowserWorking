@@ -24,11 +24,32 @@ function TennisData() {
   const [debugOverlayVisible, setDebugOverlayVisible] = useState(false);
   const [lastWsMessage, setLastWsMessage] = useState(null);
   const [wsConnectionTime, setWsConnectionTime] = useState(null);
+  const [recentUpdate, setRecentUpdate] = useState(new Set());
   const navigate = useNavigate();
   const ws = useRef(null);
   const dataRef = useRef(null);
   const previousDataHash = useRef('');
   
+  // Create a separate state for previous match data to compare for highlighting changes
+  const [previousMatches, setPreviousMatches] = useState({});
+  
+  // Function to check if a specific value has changed
+  const hasValueChanged = (matchId, path, newValue) => {
+    if (!previousMatches[matchId]) return false;
+    
+    // Navigate the path to get the old value
+    let oldValue = previousMatches[matchId];
+    const parts = path.split('.');
+    
+    for (const part of parts) {
+      if (!oldValue || typeof oldValue !== 'object') return false;
+      oldValue = oldValue[part];
+    }
+    
+    // Compare the values
+    return oldValue !== newValue;
+  };
+
   // Add debug window logging
   window.tennisDebug = {
     enableLogging: false,
@@ -188,7 +209,7 @@ function TennisData() {
     }
   };
 
-  // WebSocket message handler - completely rewritten for efficiency
+  // WebSocket message handler
   const processWebSocketData = useCallback((event) => {
     try {
       // Silent increment of message counter without logging every message
@@ -199,6 +220,8 @@ function TennisData() {
         window.tennisDebug.stats.wsMessages++;
       }
       
+      console.log('⚠️ WebSocket message received, length:', event.data.length);
+      
       // Get data as raw string first for hashing
       const rawData = event.data; 
       
@@ -207,66 +230,118 @@ function TennisData() {
         `${rawData.substring(0, 500)}... (${rawData.length} chars)` : 
         rawData);
       
-      // Quick check - if we have a hash and the raw data hash matches our previous hash exactly,
-      // don't even bother parsing the JSON or doing any additional processing
-      if (previousDataHash.current && previousDataHash.current === rawData) {
-        // Skip all processing - data is identical
+      // Parse JSON immediately
+      const jsonData = JSON.parse(rawData);
+      console.log('⚠️ JSON parsed successfully:', typeof jsonData, Array.isArray(jsonData));
+      
+      // Handle both array format and object format with 'matches' property
+      let matchesData;
+      if (Array.isArray(jsonData)) {
+        // Direct array of matches
+        console.log('⚠️ Received array format data');
+        matchesData = jsonData;
+      } else if (jsonData && typeof jsonData === 'object' && Array.isArray(jsonData.matches)) {
+        // Object with matches property
+        console.log('⚠️ Received object format data with matches property');
+        matchesData = jsonData.matches;
+      } else {
+        console.error('⚠️ Unexpected data format:', jsonData);
         return;
       }
       
-      // Parse JSON only if we need to process it further
-      const jsonData = JSON.parse(rawData);
-      
-      // Only process array data
-      if (Array.isArray(jsonData) && jsonData.length > 0) {
-        // For React state updates, we need the full object with timestamp
-        const newData = {
-          timestamp: new Date().toISOString(),
-          matches: jsonData
-        };
-        
-        // Only update if we don't have data yet or if it's actually changed
-        if (!dataRef.current || !isEqual(dataRef.current.matches, newData.matches)) {
-          // Data has changed - update our state
-          setUpdateCount(prev => {
-            // Update global stats
-            if (window.tennisDebug) {
-              window.tennisDebug.stats.dataUpdates++;
-            }
-            return prev + 1;
-          });
-          
-          dataRef.current = newData;
-          previousDataHash.current = rawData; // Store raw string for faster comparison
-          setData(newData);
-          
-          // Update timestamp display
-          const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
-          setLastUpdated(timestamp + ' ET (WebSocket)');
-          
-          // Detailed WebSocket logging when enabled
-          if (window.tennisDebug?.enableLogging) {
-            console.log(`[Tennis] Data update #${updateCount + 1}: ${jsonData.length} matches`, {
-              messageSize: rawData.length,
-              matchesCount: jsonData.length
-            });
-          }
-          // Basic periodic logging
-          else if (DEBUG || updateCount % 5 === 0) {
-            console.log(`[Tennis] Data update #${updateCount + 1}: ${jsonData.length} matches`);
-          }
-        }
+      // *** SAFETY CHECK: Don't accept empty data updates that would wipe out our matches ***
+      if (!matchesData || matchesData.length === 0) {
+        console.warn('⚠️ Received empty matches data - IGNORING UPDATE to prevent data loss');
+        return; // Exit early to preserve current data
       }
       
-      setLoading(false);
+      // Only process if we actually have matches
+      console.log(`⚠️ Processing ${matchesData.length} matches`);
+      console.log(`⚠️ Match count: ${matchesData.length}`);
+      
+      // Store current matches as previous before updating
+      const currentMatches = {};
+      if (dataRef.current && dataRef.current.matches) {
+        dataRef.current.matches.forEach(match => {
+          if (match.match_id) {
+            currentMatches[match.match_id] = {...match};
+          }
+        });
+      }
+      
+      // For React state updates, we need the full object with timestamp
+      const newData = {
+        timestamp: new Date().toISOString(),
+        matches: matchesData
+      };
+      
+      // Mark which matches have changes
+      const changedMatches = new Set();
+      matchesData.forEach(match => {
+        if (match.match_id) {
+          // If the match exists in previous data, check for changes
+          if (currentMatches[match.match_id]) {
+            // Deep comparison would be better, but for performance we'll use JSON.stringify
+            if (JSON.stringify(currentMatches[match.match_id]) !== JSON.stringify(match)) {
+              changedMatches.add(match.match_id);
+            }
+          } else {
+            // New match
+            changedMatches.add(match.match_id);
+          }
+        }
+      });
+      
+      // Store which matches have changes
+      setRecentUpdate(changedMatches);
+      
+      // Update our state - use functional update to guarantee we're working with latest state
+      setData(prevData => {
+        // Update global stats
+        if (window.tennisDebug) {
+          window.tennisDebug.stats.dataUpdates++;
+        }
+        setUpdateCount(prev => prev + 1);
+        
+        // Update timestamp display
+        const timestamp = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' });
+        setLastUpdated(timestamp + ' ET (WebSocket)');
+        
+        // Store new data in refs
+        dataRef.current = newData;
+        previousDataHash.current = rawData;
+        
+        // Store the current matches for future change detection
+        setPreviousMatches(currentMatches);
+        
+        return newData;
+      });
+      
+      // Detailed WebSocket logging when enabled
+      if (window.tennisDebug?.enableLogging) {
+        console.log(`[Tennis] Data update #${updateCount + 1}: ${matchesData.length} matches`, {
+          messageSize: rawData.length,
+          matchesCount: matchesData.length,
+          changedMatches: changedMatches.size
+        });
+      }
+      // Basic periodic logging
+      else if (DEBUG || updateCount % 5 === 0) {
+        console.log(`[Tennis] Data update #${updateCount + 1}: ${matchesData.length} matches, ${changedMatches.size} changed`);
+      }
     } catch (err) {
       // Only log errors
-      console.error('Error processing WebSocket data:', err);
+      console.error('⚠️ Error processing WebSocket data:', err);
       
       // Update global error stats
       if (window.tennisDebug) {
         window.tennisDebug.stats.errors++;
       }
+      
+      // Never clear existing data when there's an error
+      console.log('⚠️ WebSocket data processing error - keeping existing data');
+    } finally {
+      setLoading(false);
     }
   }, [updateCount]);
 
@@ -327,7 +402,8 @@ function TennisData() {
     
     // Setup WebSocket
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws`;
     logDebug(`Connecting to WebSocket at ${wsUrl}`);
     console.log(`⚠️ Connecting to WebSocket at ${wsUrl}`);
     
@@ -336,43 +412,61 @@ function TennisData() {
       ws.current.close();
     }
     
-    ws.current = new WebSocket(wsUrl);
-    
-    ws.current.onopen = () => {
-      console.log('⚠️ WebSocket connected successfully');
-      setWsStatus('connected');
-      setWsConnectionTime(Date.now());
-    };
-    
-    ws.current.onmessage = processWebSocketData;
-    
-    ws.current.onerror = (error) => {
-      console.error('⚠️ WebSocket error:', error);
-      setWsStatus('error');
-      setError('WebSocket connection error. Falling back to polling.');
+    try {
+      ws.current = new WebSocket(wsUrl);
       
-      // Update global error stats
-      if (window.tennisDebug) {
-        window.tennisDebug.stats.errors++;
-      }
+      ws.current.onopen = () => {
+        console.log('⚠️ WebSocket connected successfully');
+        setWsStatus('connected');
+        setWsConnectionTime(Date.now());
+        
+        // Send an initial message to ensure the connection is working
+        try {
+          ws.current.send('ping');
+          console.log('⚠️ Sent initial ping message');
+        } catch (e) {
+          console.error('⚠️ Error sending initial ping:', e);
+        }
+      };
       
-      // Fall back to polling if WebSocket fails
-      console.log('⚠️ WebSocket failed, falling back to polling');
-      const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
-      return () => clearInterval(intervalId);
-    };
-    
-    ws.current.onclose = (event) => {
-      console.log(`⚠️ WebSocket disconnected with code ${event.code}`);
-      setWsStatus('disconnected');
+      ws.current.onmessage = processWebSocketData;
       
-      // If WebSocket closes unexpectedly, fall back to polling
-      if (event.code !== 1000) { // 1000 is normal closure
-        console.log('⚠️ WebSocket closed abnormally, falling back to polling');
+      ws.current.onerror = (error) => {
+        console.error('⚠️ WebSocket error:', error);
+        setWsStatus('error');
+        setError('WebSocket connection error. Falling back to polling.');
+        
+        // Update global error stats
+        if (window.tennisDebug) {
+          window.tennisDebug.stats.errors++;
+        }
+        
+        // Fall back to polling if WebSocket fails
+        console.log('⚠️ WebSocket failed, falling back to polling');
         const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
         return () => clearInterval(intervalId);
-      }
-    };
+      };
+      
+      ws.current.onclose = (event) => {
+        console.log(`⚠️ WebSocket disconnected with code ${event.code}`);
+        setWsStatus('disconnected');
+        
+        // If WebSocket closes unexpectedly, fall back to polling
+        if (event.code !== 1000) { // 1000 is normal closure
+          console.log('⚠️ WebSocket closed abnormally, falling back to polling');
+          const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
+          return () => clearInterval(intervalId);
+        }
+      };
+    } catch (e) {
+      console.error('⚠️ Error creating WebSocket connection:', e);
+      setWsStatus('error');
+      setError('Could not create WebSocket connection. Falling back to polling.');
+      
+      // Fall back to polling immediately
+      const intervalId = setInterval(fetchData, 30000); // Poll every 30 seconds
+      return () => clearInterval(intervalId);
+    }
     
     // Clean up
     return () => {
@@ -400,6 +494,60 @@ function TennisData() {
   const navigateToMatchDetail = (matchId) => {
     logDebug(`Navigating to match detail: ${matchId}`);
     navigate(`/match/${matchId}`);
+  };
+
+  // Render an individual odds item with change detection
+  const renderOddsItem = (match, label, value, matchId) => {
+    // Find the appropriate market (e.g., Match Winner)
+    const markets = match.rapid_data?.grouped_markets || [];
+    const matchWinnerMarket = markets.find(market => 
+      market.name === 'Match Winner' || market.market_id === 1);
+    
+    if (!matchWinnerMarket || !matchWinnerMarket.selections) {
+      return (
+        <div className="odds-item">
+          <div className="odds-label">{label}</div>
+          <div className="odds-value">-</div>
+        </div>
+      );
+    }
+    
+    // Get the appropriate selection based on the value (1, X, 2)
+    let selection;
+    if (value === 1 || value === '1') {
+      // Home player/team
+      selection = matchWinnerMarket.selections.find(s => s.name.includes(match.home.name) || s.position === "1");
+    } else if (value === 'X' || value === 'x') {
+      // Draw (usually not in tennis, but keeping for completeness)
+      selection = matchWinnerMarket.selections.find(s => s.name.includes('Draw') || s.position === "X");
+    } else {
+      // Away player/team
+      selection = matchWinnerMarket.selections.find(s => s.name.includes(match.away.name) || s.position === "2");
+    }
+    
+    // If no selection found
+    if (!selection) {
+      return (
+        <div className="odds-item">
+          <div className="odds-label">{label}</div>
+          <div className="odds-value">-</div>
+        </div>
+      );
+    }
+    
+    // Get the odds value
+    const oddsValue = selection.odds;
+    const oddsPath = `rapid_data.grouped_markets.0.selections.${selection.name}.odds`;
+    const hasChanged = hasValueChanged(matchId, oddsPath, oddsValue);
+    
+    return (
+      <div className="odds-item">
+        <div className="odds-label">{label}</div>
+        <div className={`odds-value ${hasChanged ? 'value-changed' : ''}`}>
+          {oddsValue ? oddsValue.toFixed(2) : '-'}
+        </div>
+      </div>
+    );
   };
 
   // Show loading message if still loading and no data yet
@@ -539,6 +687,7 @@ function TennisData() {
           // Get match status
           const timeStatus = inplayEvent.time_status || '0';
           const statusText = formatTimeStatus(timeStatus);
+          const isLive = timeStatus === '1';
           
           // Get score information
           const ss = inplayEvent.ss || '';
@@ -547,7 +696,7 @@ function TennisData() {
           return (
             <div 
               key={match.match_id || index} 
-              className={`match-card ${expandedMatch === match.match_id ? 'expanded' : ''}`}
+              className={`match-card ${expandedMatch === match.match_id ? 'expanded' : ''} ${recentUpdate.has(match.match_id) ? 'recent-update' : ''}`}
               onClick={() => navigateToMatchDetail(match.match_id)}
             >
               <div className="match-header">
@@ -558,6 +707,12 @@ function TennisData() {
                   {formatTimestamp(inplayEvent.time)}
                 </div>
                 <div className="match-status">
+                  {isLive && (
+                    <div className="live-badge">
+                      <span className="live-indicator"></span>
+                      LIVE
+                    </div>
+                  )}
                   {statusText}
                 </div>
                 <button 
@@ -569,7 +724,7 @@ function TennisData() {
               </div>
               
               <div className="match-teams">
-                <div className="team home-team">
+                <div className={`team home ${hasValueChanged(match.match_id, 'betsapi_data.inplayEvent.ss', ss) ? 'element-changed' : ''}`}>
                   <span className="flag">{homeTeam.cc ? `🏴‍ ${homeTeam.cc}` : '🏴‍'}</span>
                   <span className="name">{formatPlayerName(homeTeam.name)}</span>
                 </div>
@@ -595,11 +750,20 @@ function TennisData() {
                   )}
                 </div>
                 
-                <div className="team away-team">
+                <div className={`team away ${hasValueChanged(match.match_id, 'betsapi_data.inplayEvent.ss', ss) ? 'element-changed' : ''}`}>
                   <span className="flag">{awayTeam.cc ? `🏴‍ ${awayTeam.cc}` : '🏴‍'}</span>
                   <span className="name">{formatPlayerName(awayTeam.name)}</span>
                 </div>
               </div>
+              
+              {/* Add odds display if available */}
+              {match.rapid_data && match.rapid_data.grouped_markets && match.rapid_data.grouped_markets.length > 0 && (
+                <div className="match-odds">
+                  {renderOddsItem(match, 'Home', 1, match.match_id)}
+                  {renderOddsItem(match, 'Draw', 'X', match.match_id)}
+                  {renderOddsItem(match, 'Away', 2, match.match_id)}
+                </div>
+              )}
               
               {expandedMatch === match.match_id && (
                 <div className="match-details">
@@ -614,6 +778,15 @@ function TennisData() {
                   <div className="data-source-info">
                     <div>Sources: {match.betsapi_data ? '✓ BetsAPI' : '✗ BetsAPI'} {match.rapid_data ? '✓ RapidAPI' : '✗ RapidAPI'}</div>
                     <div>Match ID: {match.match_id}</div>
+                  </div>
+                  
+                  <div className="odds-section">
+                    <h3>Match Winner Odds</h3>
+                    <div className="odds-grid">
+                      {renderOddsItem(match, 'Home', 1, match.match_id)}
+                      {renderOddsItem(match, 'Draw', 'X', match.match_id)}
+                      {renderOddsItem(match, 'Away', 2, match.match_id)}
+                    </div>
                   </div>
                 </div>
               )}

@@ -14,7 +14,7 @@ import requests
 import sys
 import json
 from typing import Dict, List, Any, Optional
-from aggregator.sports.tennis.market_grouper import MarketGrouper
+from aggregator.sports.tennis.market_grouper import MarketGrouper, group_markets
 import hashlib
 import pytz
 
@@ -190,37 +190,38 @@ def serve_react_app(full_path: str = ""):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client_id = str(id(websocket))
-    logger.info(f"New WebSocket connection established: {client_id}")
-    
-    # Initialize client data in the global dictionary
-    websocket_clients[client_id] = {
-        "last_sent_hash": "",
-        "last_sent_time": time.time(),
-        "connection": websocket
-    }
-    
-    await websocket.accept()
-    active_connections.append(websocket)
-    
-    # Debug current state
-    logger.info(f"Active connections count: {len(active_connections)}")
-    logger.info(f"Current tennis_matches count: {len(tennis_matches)}")
-    
-    # Send initial data immediately
-    if tennis_matches:
-        try:
-            current_hash = hashlib.md5(json.dumps(tennis_matches, sort_keys=True).encode()).hexdigest()
-            logger.info(f"Sending initial data to client {client_id}, data length: {len(tennis_matches)}")
-            await websocket.send_json(tennis_matches)
-            logger.info(f"Initial data sent successfully to client {client_id}")
-            websocket_clients[client_id]["last_sent_hash"] = current_hash
-            websocket_clients[client_id]["last_sent_time"] = time.time()
-        except Exception as e:
-            logger.error(f"Error sending initial data: {e}")
-    else:
-        logger.warning(f"No tennis_matches data available to send to client {client_id}")
-    
     try:
+        logger.info(f"New WebSocket connection attempt: {client_id}")
+        await websocket.accept()
+        logger.info(f"WebSocket connection accepted: {client_id}")
+        
+        # Initialize client data in the global dictionary
+        websocket_clients[client_id] = {
+            "last_sent_hash": "",
+            "last_sent_time": time.time(),
+            "connection": websocket
+        }
+        
+        active_connections.append(websocket)
+        
+        # Debug current state
+        logger.info(f"Active connections count: {len(active_connections)}")
+        logger.info(f"Current tennis_matches count: {len(tennis_matches)}")
+        
+        # Send initial data immediately
+        if tennis_matches:
+            try:
+                current_hash = hashlib.md5(json.dumps(tennis_matches, sort_keys=True).encode()).hexdigest()
+                logger.info(f"Sending initial data to client {client_id}, data length: {len(tennis_matches)}")
+                await websocket.send_json(tennis_matches)
+                logger.info(f"Initial data sent successfully to client {client_id}")
+                websocket_clients[client_id]["last_sent_hash"] = current_hash
+                websocket_clients[client_id]["last_sent_time"] = time.time()
+            except Exception as e:
+                logger.error(f"Error sending initial data: {e}")
+        else:
+            logger.warning(f"No tennis_matches data available to send to client {client_id}")
+        
         # This is a key change - instead of actively polling and sending data,
         # we now just keep the connection open and wait for client messages
         # The actual updates are pushed from the process_tennis_data function
@@ -233,6 +234,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.debug(f"Received message from client {client_id}: {msg[:20]}...")
             except WebSocketDisconnect:
                 logger.info(f"Client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error receiving message from client {client_id}: {e}")
                 break
     except Exception as e:
         logger.error(f"WebSocket connection error for client {client_id}: {e}")
@@ -275,8 +279,8 @@ async def broadcast_data_update(data):
             if current_hash != client_last_hash:
                 should_send = True
                 logger.info(f"Data changed, broadcasting to client {client_id}")
-            # Or send heartbeat every 30 seconds even if no change
-            elif current_time - client_last_time > 30:
+            # Or send heartbeat every 5 seconds even if no change
+            elif current_time - client_last_time > 5:
                 should_send = True
                 logger.debug(f"Sending periodic heartbeat to client {client_id}")
             
@@ -396,37 +400,35 @@ async def process_tennis_data():
                 for match in tennis_data:
                     if "rapid_data" in match and "raw_odds_data" in match["rapid_data"]:
                         try:
-                            match["rapid_data"]["grouped_markets"] = market_grouper.group_markets(
-                                match["rapid_data"]["raw_odds_data"].get("markets", {})
+                            # Use the standalone function instead of a method on the instance
+                            match["rapid_data"]["grouped_markets"] = group_markets(
+                                [match["rapid_data"]["raw_odds_data"].get("markets", {})]
                             )
                         except Exception as e:
                             logger.error(f"Error grouping markets for match {match.get('match_id')}: {e}")
                 
-                # Update tennis_matches with the new data
-                new_matches = tennis_data
-                
                 # Create a hash of the new data
-                new_data_hash = hashlib.md5(json.dumps(new_matches, sort_keys=True).encode()).hexdigest()
+                new_data_hash = hashlib.md5(json.dumps(tennis_data, sort_keys=True).encode()).hexdigest()
                 
-                # Only update if data has actually changed
-                if new_data_hash != last_processed_data_hash:
-                    tennis_matches = new_matches
-                    last_processed_data_hash = new_data_hash
-                    logger.info(f"Tennis data updated with {len(tennis_matches)} matches (hash: {new_data_hash[:8]}...)")
-                    
-                    # Cache matches for history
-                    for match in tennis_matches:
-                        match_id = match.get("match_id")
-                        if match_id:
-                            match_cache[match_id] = {
-                                "data": match,
-                                "timestamp": time.time()
-                            }
-                    
-                    # Broadcast the update to all connected WebSocket clients
-                    await broadcast_data_update(tennis_matches)
-                else:
-                    logger.info("No changes in tennis data, skipping broadcast")
+                # For tennis data, we should ALWAYS update and broadcast
+                # Live tennis has constant changes (score, serve, points, odds)
+                tennis_matches = tennis_data
+                last_processed_data_hash = new_data_hash
+                logger.info(f"Tennis data updated with {len(tennis_matches)} matches (hash: {new_data_hash[:8]}...)")
+                
+                # Cache matches for history
+                for match in tennis_matches:
+                    match_id = match.get("match_id")
+                    if match_id:
+                        match_cache[match_id] = {
+                            "data": match,
+                            "timestamp": time.time()
+                        }
+                
+                # Always broadcast the update to all connected WebSocket clients
+                # Tennis is a real-time sport with constant data changes
+                await broadcast_data_update(tennis_matches)
+                logger.info("Broadcasting tennis update to all clients")
                 
             except Exception as e:
                 logger.error(f"Error fetching from Tennis Bot API: {e}")
@@ -434,7 +436,7 @@ async def process_tennis_data():
             
             # Sleep until next update cycle
             execution_time = time.time() - start_time
-            sleep_time = max(5, 30 - execution_time)  # At least 5 sec, target 30 sec total cycle
+            sleep_time = max(1, 10 - execution_time)  # Reduce to 10 seconds per cycle, min 1 sec
             logger.debug(f"Sleeping for {sleep_time:.2f} seconds before next update")
             await asyncio.sleep(sleep_time)
             
